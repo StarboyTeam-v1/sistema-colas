@@ -1,7 +1,7 @@
 import time
 import random
 import json
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from flask_cors import CORS
 import threading
 import queue
@@ -9,19 +9,22 @@ from datetime import datetime
 from flask_socketio import SocketIO
 
 app = Flask(__name__, template_folder='templates')
+app.secret_key = 'clave_secreta_segura'
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# Base de datos en memoria
 clientes_db = {}
 db_lock = threading.Lock()
 
+# Colas y contadores
 cola_caja = queue.Queue()
 cola_servicio_cliente = queue.Queue()
 contador_caja = 1
 contador_servicio = 1
 contador_lock = threading.Lock()
 
-# Nuevos estados de agentes
+# Estado de agentes
 agentes_caja = [None, None]
 agente_servicio = None
 
@@ -29,6 +32,10 @@ cajeros_disponibles = 2
 servicio_cliente_disponibles = 1
 cajeros_lock = threading.Lock()
 servicio_lock = threading.Lock()
+
+# Credenciales admin
+ADMIN_USER = 'admin'
+ADMIN_PASS = 'admin123'
 
 def generate_ticket(tipo_servicio):
     global contador_caja, contador_servicio
@@ -40,44 +47,45 @@ def generate_ticket(tipo_servicio):
             posicion = cola_caja.qsize()
             tiempo_estimado = posicion * 7.5
             prefijo = 'C'
-        else:
+        elif tipo_servicio == 'servicio_cliente':
             numero_ticket = contador_servicio
             contador_servicio += 1
             cola_servicio_cliente.put(numero_ticket)
             posicion = cola_servicio_cliente.qsize()
             tiempo_estimado = posicion * 11
             prefijo = 'S'
+        else:
+            return None, None, None
 
     ticket_formateado = f"{prefijo}{numero_ticket:03d}"
     return ticket_formateado, posicion, int(tiempo_estimado)
 
 def procesar_caja(numero_ticket, agente_id):
-    global agentes_caja
+    global agentes_caja, cajeros_disponibles
     tiempo_atencion = random.randint(5, 10)
     agentes_caja[agente_id] = f"C{numero_ticket:03d}"
     socketio.emit('agente_update', get_agente_status())
     time.sleep(tiempo_atencion)
     agentes_caja[agente_id] = None
     with cajeros_lock:
-        global cajeros_disponibles
         cajeros_disponibles += 1
     socketio.emit('queue_update', get_queue_status())
     socketio.emit('agente_update', get_agente_status())
 
 def procesar_servicio(numero_ticket):
-    global agente_servicio
+    global agente_servicio, servicio_cliente_disponibles
     tiempo_atencion = random.randint(7, 15)
     agente_servicio = f"S{numero_ticket:03d}"
     socketio.emit('agente_update', get_agente_status())
     time.sleep(tiempo_atencion)
     agente_servicio = None
     with servicio_lock:
-        global servicio_cliente_disponibles
         servicio_cliente_disponibles += 1
     socketio.emit('queue_update', get_queue_status())
     socketio.emit('agente_update', get_agente_status())
 
 def monitor_cola_caja():
+    global cajeros_disponibles
     while True:
         if not cola_caja.empty():
             with cajeros_lock:
@@ -90,6 +98,7 @@ def monitor_cola_caja():
         time.sleep(1)
 
 def monitor_cola_servicio():
+    global servicio_cliente_disponibles
     while True:
         if not cola_servicio_cliente.empty():
             with servicio_lock:
@@ -103,21 +112,47 @@ def monitor_cola_servicio():
 def index():
     return render_template('index.html')
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        if username == ADMIN_USER and password == ADMIN_PASS:
+            session['admin'] = True
+            return redirect(url_for('admin_panel'))
+        return render_template('login.html', error='Credenciales incorrectas')
+    return render_template('login.html')
+
+@app.route('/admin')
+def admin_panel():
+    if not session.get('admin'):
+        return redirect(url_for('login'))
+    return render_template('admin.html', clientes=clientes_db)
+
+@app.route('/logout')
+def logout():
+    session.pop('admin', None)
+    return redirect(url_for('login'))
+
 @app.route('/api/ticket', methods=['POST'])
 def external_ticket():
     data = request.json
     if not data or 'tipo_servicio' not in data:
-        return jsonify({'error': 'Invalid request'}), 400
+        return jsonify({'error': 'Solicitud inválida'}), 400
+
+    tipo = data['tipo_servicio']
+    if tipo not in ['caja', 'servicio_cliente']:
+        return jsonify({'error': 'Tipo de servicio no válido'}), 400
 
     cliente_id = data.get('cliente_id', f"EXT-{random.randint(1000,9999)}")
-    ticket, pos, wait = generate_ticket(data['tipo_servicio'])
+    ticket, pos, wait = generate_ticket(tipo)
 
     with db_lock:
         clientes_db[cliente_id] = {
             'ticket': ticket,
             'status': 'waiting',
             'timestamp': datetime.now().isoformat(),
-            'service': data['tipo_servicio']
+            'service': tipo
         }
 
     socketio.emit('queue_update', get_queue_status())
@@ -128,12 +163,22 @@ def external_ticket():
         'cliente_id': cliente_id
     })
 
+@app.route('/api/attended/<cliente_id>', methods=['POST'])
+def mark_attended(cliente_id):
+    with db_lock:
+        if cliente_id in clientes_db:
+            clientes_db[cliente_id]['status'] = 'attended'
+            clientes_db[cliente_id]['attended_at'] = datetime.now().isoformat()
+            socketio.emit('attended_update', {'client_id': cliente_id})
+            return jsonify({'status': 'success'})
+    return jsonify({'error': 'Cliente no encontrado'}), 404
+
 @app.route('/api/status/<cliente_id>', methods=['GET'])
 def client_status(cliente_id):
     with db_lock:
         if cliente_id in clientes_db:
             return jsonify(clientes_db[cliente_id])
-    return jsonify({'error': 'Client not found'}), 404
+    return jsonify({'error': 'Cliente no encontrado'}), 404
 
 @app.route('/estado-colas')
 def estado_colas():
