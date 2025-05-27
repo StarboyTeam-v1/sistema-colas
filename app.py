@@ -12,7 +12,6 @@ app.secret_key = 'clave_secreta_segura'
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# ----- In-Memory "DB" and Locks -----
 clientes_db = {}
 db_lock = threading.Lock()
 
