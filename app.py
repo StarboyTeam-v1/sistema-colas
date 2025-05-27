@@ -8,7 +8,7 @@ import queue
 from datetime import datetime
 from flask_socketio import SocketIO
 
-app = Flask(__name__, template_folder='templetes')
+app = Flask(__name__, template_folder='templates')
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
