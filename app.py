@@ -206,6 +206,13 @@ def get_agente_status():
         'agente_servicio': agente_servicio
     }
 
+@app.route('/tickets-por-agente')
+def tickets_por_agente():
+    return jsonify({
+        'caja': agentes_caja,
+        'servicio_cliente': agente_servicio
+    })
+
 if __name__ == '__main__':
     threading.Thread(target=monitor_cola_caja, daemon=True).start()
     threading.Thread(target=monitor_cola_servicio, daemon=True).start()
