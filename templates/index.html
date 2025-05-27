@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Atención al Cliente</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/js/all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-lg p-6">
+            <h1 class="text-3xl font-bold text-center text-blue-800 mb-6">Sistema de Colas Bancarias</h1>
+            
+            <!-- Service Selection -->
+            <div class="flex flex-col md:flex-row justify-center gap-4 mb-8">
+                <button onclick="getTicket('caja')" 
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition duration-300">
+                    <i class="fas fa-cash-register mr-2"></i>Caja
+                </button>
+                <button onclick="getTicket('servicio_cliente')" 
+                    class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition duration-300">
+                    <i class="fas fa-headset mr-2"></i>Servicio al Cliente
+                </button>
+            </div>
+
+            
+            <div id="ticketInfo" class="hidden bg-blue-50 p-4 rounded-lg mb-8">
+                <h2 class="text-xl font-semibold mb-2">Su ticket</h2>
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-4xl font-bold" id="ticketNumber"></p>
+                        <p class="text-gray-600">Posición en cola: <span id="position" class="font-medium"></span></p>
+                        <p class="text-gray-600">Tiempo estimado: <span id="waitTime" class="font-medium"></span> min</p>
+                    </div>
+                    <div id="statusBadge" class="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-medium">
+                        En espera
+                    </div>
+                </div>
+                <div id="qrCode" class="mt-4 flex justify-center"></div>
+            </div>
+
+            <!-- Estado Cola-->
+            <div class="bg-white border border-gray-200 rounded-lg p-4">
+                <h2 class="text-xl font-semibold mb-4 flex items-center justify-between">
+                    <span>Estado de las Colas</span>
+                    <span id="lastUpdate" class="text-sm text-gray-500"></span>
+                </h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Caja Estado -->
+                    <div class="border border-gray-200 rounded-lg p-4">
+                        <h3 class="font-medium text-lg mb-2 flex items-center">
+                            <i class="fas fa-cash-register text-blue-600 mr-2"></i>Caja
+                        </h3>
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="text-gray-600">En espera: <span id="cajaCola" class="font-medium">0</span></p>
+                                <p class="text-gray-600">Disponibles: <span id="cajaDisponibles" class="font-medium">0</span></p>
+                            </div>
+                            <div id="cajaStatus" class="w-3 h-3 rounded-full bg-gray-300"></div>
+                        </div>
+                    </div>
+
+                    <!-- Servicio Estado -->
+                    <div class="border border-gray-200 rounded-lg p-4">
+                        <h3 class="font-medium text-lg mb-2 flex items-center">
+                            <i class="fas fa-headset text-green-600 mr-2"></i>Servicio al Cliente
+                        </h3>
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="text-gray-600">En espera: <span id="servicioCola" class="font-medium">0</span></p>
+                                <p class="text-gray-600">Disponibles: <span id="servicioDisponibles" class="font-medium">0</span></p>
+                            </div>
+                            <div id="servicioStatus" class="w-3 h-3 rounded-full bg-gray-300"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Atendidos Recientemente -->
+            <div id="recentAttended" class="mt-6 hidden">
+                <h3 class="text-lg font-medium mb-2">Recientemente atendidos</h3>
+                <div id="attendedList" class="space-y-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io({path: '/socket.io'});
+        let currentClientId = null;
+
+        // Conexiones al Socket.IO
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            updateQueueStatus();
+        });
+
+        // Manejo de la cola en live
+        socket.on('queue_update', (data) => {
+            updateQueueUI(data);
+            updateTimestamp();
+        });
+
+        // Maneja las actualizaciones 
+        socket.on('attended_update', (data) => {
+            if (data.client_id === currentClientId) {
+                document.getElementById('statusBadge').textContent = 'Atendido';
+                document.getElementById('statusBadge').className = 'bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium';
+            }
+            showAttendedClient(data.client_id);
+        });
+
+        // Obtener un nuevo ticket
+        async function getTicket(tipoServicio) {
+            try {
+                const response = await fetch('/api/ticket', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ tipo_servicio: tipoServicio })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    currentClientId = data.client_id;
+                    showTicketInfo(data);
+                    startStatusCheck(data.client_id);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error al obtener ticket');
+            }
+        }
+
+        // Mostrar información del ticket
+        function showTicketInfo(data) {
+            document.getElementById('ticketNumber').textContent = data.ticket;
+            document.getElementById('position').textContent = data.position;
+            document.getElementById('waitTime').textContent = data.wait_time;
+            document.getElementById('ticketInfo').classList.remove('hidden');
+            
+            
+            document.getElementById('qrCode').innerHTML = `
+                <div class="bg-gray-200 p-2 rounded">
+                    <div class="text-center text-xs">Scan for updates</div>
+                    <div class="text-center text-4xl">${data.ticket}</div>
+                </div>
+            `;
+        }
+
+        // Actualizar estado de la cola
+        function updateQueueUI(data) {
+            document.getElementById('cajaCola').textContent = data.caja.waiting;
+            document.getElementById('cajaDisponibles').textContent = data.caja.available;
+            document.getElementById('servicioCola').textContent = data.servicio_cliente.waiting;
+            document.getElementById('servicioDisponibles').textContent = data.servicio_cliente.available;
+
+            // Actualiza el estado de los indicadores 
+            document.getElementById('cajaStatus').className = 
+                data.caja.available > 0 ? 'w-3 h-3 rounded-full bg-green-500' : 'w-3 h-3 rounded-full bg-red-500';
+            document.getElementById('servicioStatus').className = 
+                data.servicio_cliente.available > 0 ? 'w-3 h-3 rounded-full bg-green-500' : 'w-3 h-3 rounded-full bg-red-500';
+        }
+
+        
+        function updateTimestamp() {
+            const now = new Date();
+            document.getElementById('lastUpdate').textContent = 
+                `Actualizado: ${now.toLocaleTimeString()}`;
+        }
+
+        // Revisa estado de cliente constantemente 
+        function startStatusCheck(clientId) {
+            const interval = setInterval(async () => {
+                const response = await fetch(`/api/status/${clientId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status === 'attended') {
+                        clearInterval(interval);
+                        document.getElementById('statusBadge').textContent = 'Atendido';
+                        document.getElementById('statusBadge').className = 'bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium';
+                    }
+                }
+            }, 5000);
+        }
+
+    
+        async function showAttendedClient(clientId) {
+            const response = await fetch(`/api/status/${clientId}`);
+            if (response.ok) {
+                const data = await response.json();
+                const attendedList = document.getElementById('attendedList');
+                const item = document.createElement('div');
+                item.className = 'bg-gray-50 p-2 rounded flex justify-between items-center';
+                item.innerHTML = `
+                    <span class="font-medium">${data.ticket}</span>
+                    <span class="text-sm text-gray-500">${new Date(data.attended_at).toLocaleTimeString()}</span>
+                `;
+                attendedList.prepend(item);
+                document.getElementById('recentAttended').classList.remove('hidden');
+            }
+        }
+
+        
+        async function updateQueueStatus() {
+            try {
+                const response = await fetch('/estado-colas');
+                if (response.ok) {
+                    const data = await response.json();
+                    updateQueueUI(data);
+                    updateTimestamp();
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        // Inicio
+        document.addEventListener('DOMContentLoaded', () => {
+            updateQueueStatus();
+        });
+    </script>
+</body>
+</html>
