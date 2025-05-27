@@ -13,18 +13,15 @@ app.secret_key = 'clave_secreta_segura'
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Base de datos en memoria
 clientes_db = {}
 db_lock = threading.Lock()
 
-# Colas y contadores
 cola_caja = queue.Queue()
 cola_servicio_cliente = queue.Queue()
 contador_caja = 1
 contador_servicio = 1
 contador_lock = threading.Lock()
 
-# Estado de agentes
 agentes_caja = [None, None]
 agente_servicio = None
 
@@ -33,7 +30,6 @@ servicio_cliente_disponibles = 1
 cajeros_lock = threading.Lock()
 servicio_lock = threading.Lock()
 
-# Credenciales admin
 ADMIN_USER = 'admin'
 ADMIN_PASS = 'admin123'
 
@@ -47,15 +43,13 @@ def generate_ticket(tipo_servicio):
             posicion = cola_caja.qsize()
             tiempo_estimado = posicion * 7.5
             prefijo = 'C'
-        elif tipo_servicio == 'servicio_cliente':
+        else:
             numero_ticket = contador_servicio
             contador_servicio += 1
             cola_servicio_cliente.put(numero_ticket)
             posicion = cola_servicio_cliente.qsize()
             tiempo_estimado = posicion * 11
             prefijo = 'S'
-        else:
-            return None, None, None
 
     ticket_formateado = f"{prefijo}{numero_ticket:03d}"
     return ticket_formateado, posicion, int(tiempo_estimado)
@@ -63,8 +57,15 @@ def generate_ticket(tipo_servicio):
 def procesar_caja(numero_ticket, agente_id):
     global agentes_caja, cajeros_disponibles
     tiempo_atencion = random.randint(5, 10)
-    agentes_caja[agente_id] = f"C{numero_ticket:03d}"
-    socketio.emit('agente_update', get_agente_status())
+    ticket_id = f"C{numero_ticket:03d}"
+    agentes_caja[agente_id] = ticket_id
+    socketio.emit('agente_update', {
+        'agentes_caja': agentes_caja,
+        'agente_servicio': agente_servicio,
+        'duraciones': {
+            f"caja{agente_id+1}": tiempo_atencion
+        }
+    })
     time.sleep(tiempo_atencion)
     agentes_caja[agente_id] = None
     with cajeros_lock:
@@ -75,8 +76,15 @@ def procesar_caja(numero_ticket, agente_id):
 def procesar_servicio(numero_ticket):
     global agente_servicio, servicio_cliente_disponibles
     tiempo_atencion = random.randint(7, 15)
-    agente_servicio = f"S{numero_ticket:03d}"
-    socketio.emit('agente_update', get_agente_status())
+    ticket_id = f"S{numero_ticket:03d}"
+    agente_servicio = ticket_id
+    socketio.emit('agente_update', {
+        'agentes_caja': agentes_caja,
+        'agente_servicio': agente_servicio,
+        'duraciones': {
+            "servicio": tiempo_atencion
+        }
+    })
     time.sleep(tiempo_atencion)
     agente_servicio = None
     with servicio_lock:
@@ -163,16 +171,6 @@ def external_ticket():
         'cliente_id': cliente_id
     })
 
-@app.route('/api/attended/<cliente_id>', methods=['POST'])
-def mark_attended(cliente_id):
-    with db_lock:
-        if cliente_id in clientes_db:
-            clientes_db[cliente_id]['status'] = 'attended'
-            clientes_db[cliente_id]['attended_at'] = datetime.now().isoformat()
-            socketio.emit('attended_update', {'client_id': cliente_id})
-            return jsonify({'status': 'success'})
-    return jsonify({'error': 'Cliente no encontrado'}), 404
-
 @app.route('/api/status/<cliente_id>', methods=['GET'])
 def client_status(cliente_id):
     with db_lock:
@@ -187,6 +185,13 @@ def estado_colas():
 @app.route('/estado-agentes')
 def estado_agentes():
     return jsonify(get_agente_status())
+
+@app.route('/tickets-por-agente')
+def tickets_por_agente():
+    return jsonify({
+        'caja': agentes_caja,
+        'servicio_cliente': agente_servicio
+    })
 
 def get_queue_status():
     return {
@@ -205,13 +210,6 @@ def get_agente_status():
         'agentes_caja': agentes_caja,
         'agente_servicio': agente_servicio
     }
-
-@app.route('/tickets-por-agente')
-def tickets_por_agente():
-    return jsonify({
-        'caja': agentes_caja,
-        'servicio_cliente': agente_servicio
-    })
 
 if __name__ == '__main__':
     threading.Thread(target=monitor_cola_caja, daemon=True).start()
