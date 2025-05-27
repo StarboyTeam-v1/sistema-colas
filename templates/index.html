@@ -41,7 +41,7 @@
                         <p id="ticketNumber" class="text-5xl font-bold text-blue-900"></p>
                         <p class="text-gray-700">Posición en cola: <span id="position" class="font-semibold"></span></p>
                         <p class="text-gray-700">Tiempo restante: <span id="waitTime" class="font-semibold"></span> segundos</p>
-                    <//div>
+                    </div>
                     <div id="statusBadge" class="bg-yellow-100 text-yellow-800 px-4 py-2 rounded-full text-sm font-semibold shadow">
                         En espera
                     </div>
@@ -112,12 +112,16 @@
       socket.on('connect', () => updateQueueStatus());
       socket.on('queue_update', data => { updateQueueUI(data); updateTimestamp(); });
       socket.on('agente_update', data => {
+        // actualizar texto
         document.getElementById('agenteCaja1').textContent = data.agentes_caja[0] ? `Atendiendo: ${data.agentes_caja[0]}` : '—';
         document.getElementById('agenteCaja2').textContent = data.agentes_caja[1] ? `Atendiendo: ${data.agentes_caja[1]}` : '—';
         document.getElementById('agenteServicio').textContent = data.agente_servicio ? `Atendiendo: ${data.agente_servicio}` : '—';
-        if(data.duraciones){ if(data.duraciones.caja1) actualizarBarra('barraCaja1', data.duraciones.caja1);
-                               if(data.duraciones.caja2) actualizarBarra('barraCaja2', data.duraciones.caja2);
-                               if(data.duraciones.servicio) actualizarBarra('barraServicio', data.duraciones.servicio);}    
+        // actualizar barras
+        if (data.duraciones) {
+          if (data.duraciones.caja1) actualizarBarra('barraCaja1', data.duraciones.caja1);
+          if (data.duraciones.caja2) actualizarBarra('barraCaja2', data.duraciones.caja2);
+          if (data.duraciones.servicio) actualizarBarra('barraServicio', data.duraciones.servicio);
+        }
       });
 
       function actualizarBarra(id, duracionSegundos) {
@@ -126,8 +130,12 @@
         let progreso = 0;
         const intervalo = setInterval(() => {
           progreso += 100 / duracionSegundos;
-          if (progreso >= 100) { barra.style.width = '100%'; clearInterval(intervalo); }
-          else barra.style.width = progreso + '%';
+          if (progreso >= 100) {
+            barra.style.width = '100%';
+            clearInterval(intervalo);
+          } else {
+            barra.style.width = progreso + '%';
+          }
         }, 1000);
       }
 
@@ -137,7 +145,8 @@
         document.getElementById('position').textContent = data.position;
         let remaining = data.wait_time;
         document.getElementById('waitTime').textContent = remaining;
-        countdown = setInterval(() => { remaining = Math.max(0, remaining - 1);
+        countdown = setInterval(() => {
+          remaining = Math.max(0, remaining - 1);
           document.getElementById('waitTime').textContent = remaining;
           if (remaining <= 0) clearInterval(countdown);
         }, 1000);
@@ -148,45 +157,79 @@
       }
 
       async function getTicket(tipo) {
-        const res = await fetch('/api/ticket',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({tipo_servicio:tipo})});
+        const res = await fetch('/api/ticket', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ tipo_servicio: tipo })
+        });
         const data = await res.json();
-        if(res.ok){ currentClientId=data.cliente_id; showTicketInfo(data); startStatusCheck(data.cliente_id); }
-        else alert(data.error);
+        if (res.ok) {
+          currentClientId = data.cliente_id;
+          showTicketInfo(data);
+          startStatusCheck(data.cliente_id);
+        } else {
+          alert(data.error);
+        }
       }
 
       function updateQueueUI(data) {
         document.getElementById('cajaCola').textContent = data.caja.waiting;
         document.getElementById('cajaDisponibles').textContent = data.caja.available;
-        document.getElementById('cajaStatus').className = data.caja.available>0?'w-4 h-4 mt-2 rounded-full bg-green-500':'w-4 h-4 mt-2 rounded-full bg-red-500';
+        document.getElementById('cajaStatus').className =
+          data.caja.available > 0 ?
+          'w-4 h-4 mt-2 rounded-full bg-green-500' :
+          'w-4 h-4 mt-2 rounded-full bg-red-500';
         document.getElementById('servicioCola').textContent = data.servicio_cliente.waiting;
         document.getElementById('servicioDisponibles').textContent = data.servicio_cliente.available;
-        document.getElementById('servicioStatus').className = data.servicio_cliente.available>0?'w-4 h-4 mt-2 rounded-full bg-green-500':'w-4 h-4 mt-2 rounded-full bg-red-500';
+        document.getElementById('servicioStatus').className =
+          data.servicio_cliente.available > 0 ?
+          'w-4 h-4 mt-2 rounded-full bg-green-500' :
+          'w-4 h-4 mt-2 rounded-full bg-red-500';
       }
 
       function updateTimestamp() {
-        document.getElementById('lastUpdate').textContent = `Actualizado: ${new Date().toLocaleTimeString()}`;
+        document.getElementById('lastUpdate').textContent =
+          `Actualizado: ${new Date().toLocaleTimeString()}`;
       }
 
       function startStatusCheck(id) {
-        const iv = setInterval(async()=>{ const r = await fetch(`/api/status/${id}`);
-          if(r.ok){ const d = await r.json(); if(d.status==='attended'){ clearInterval(iv);
-            document.getElementById('statusBadge').textContent='Atendido';
-            document.getElementById('statusBadge').className=
-              'bg-green-100 text-green-800 px-4 py-2 rounded-full text-sm font-semibold shadow';
-          }} },2000);
+        const iv = setInterval(async () => {
+          const r = await fetch(`/api/status/${id}`);
+          if (r.ok) {
+            const d = await r.json();
+            if (d.status === 'attended') {
+              clearInterval(iv);
+              document.getElementById('statusBadge').textContent = 'Atendido';
+              document.getElementById('statusBadge').className =
+                'bg-green-100 text-green-800 px-4 py-2 rounded-full text-sm font-semibold shadow';
+            }
+          }
+        }, 2000);
       }
 
       async function updateQueueStatus() {
-        try{ const [qRes,aRes] = await Promise.all([fetch('/estado-colas'),fetch('/estado-agentes')]);
-          if(qRes.ok){ const q=await qRes.json(); updateQueueUI(q); updateTimestamp(); }
-          if(aRes.ok){ const d=await aRes.json();
-            document.getElementById('agenteCaja1').textContent=d.agentes_caja[0]||'—';
-            document.getElementById('agenteCaja2').textContent=d.agentes_caja[1]||'—';
-            document.getElementById('agenteServicio').textContent=d.agente_servicio||'—'; }
-        } catch(e){ console.error(e); } }
+        try {
+          const [qRes, aRes] = await Promise.all([
+            fetch('/estado-colas'),
+            fetch('/estado-agentes')
+          ]);
+          if (qRes.ok) {
+            const q = await qRes.json();
+            updateQueueUI(q);
+            updateTimestamp();
+          }
+          if (aRes.ok) {
+            const d = await aRes.json();
+            document.getElementById('agenteCaja1').textContent = d.agentes_caja[0] ? `Atendiendo: ${d.agentes_caja[0]}` : '—';
+            document.getElementById('agenteCaja2').textContent = d.agentes_caja[1] ? `Atendiendo: ${d.agentes_caja[1]}` : '—';
+            document.getElementById('agenteServicio').textContent = d.agente_servicio ? `Atendiendo: ${d.agente_servicio}` : '—';
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
 
-      document.addEventListener('DOMContentLoaded',() => updateQueueStatus());
+      document.addEventListener('DOMContentLoaded', () => updateQueueStatus());
     </script>
 </body>
 </html>
