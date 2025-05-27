@@ -12,16 +12,19 @@ app = Flask(__name__, template_folder='templates')
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Traqueo de clientes
 clientes_db = {}
 db_lock = threading.Lock()
 
-# cola inicializacion
 cola_caja = queue.Queue()
 cola_servicio_cliente = queue.Queue()
 contador_caja = 1
 contador_servicio = 1
 contador_lock = threading.Lock()
+
+# Nuevos estados de agentes
+agentes_caja = [None, None]
+agente_servicio = None
+
 cajeros_disponibles = 2
 servicio_cliente_disponibles = 1
 cajeros_lock = threading.Lock()
@@ -37,62 +40,65 @@ def generate_ticket(tipo_servicio):
             posicion = cola_caja.qsize()
             tiempo_estimado = posicion * 7.5
             prefijo = 'C'
-        else:  # servicio_cliente
+        else:
             numero_ticket = contador_servicio
             contador_servicio += 1
             cola_servicio_cliente.put(numero_ticket)
             posicion = cola_servicio_cliente.qsize()
             tiempo_estimado = posicion * 11
             prefijo = 'S'
-    
+
     ticket_formateado = f"{prefijo}{numero_ticket:03d}"
     return ticket_formateado, posicion, int(tiempo_estimado)
 
-# procesar funciones existentes (procesar_caja, procesar_servicio)
-def procesar_caja(numero_ticket):
+def procesar_caja(numero_ticket, agente_id):
+    global agentes_caja
     tiempo_atencion = random.randint(5, 10)
-    print(f"Procesando ticket {numero_ticket} en CAJA - tiempo estimado: {tiempo_atencion} segundos")
+    agentes_caja[agente_id] = f"C{numero_ticket:03d}"
+    socketio.emit('agente_update', get_agente_status())
     time.sleep(tiempo_atencion)
-    print(f"Ticket {numero_ticket} de CAJA ha sido atendido.")
-    global cajeros_disponibles
+    agentes_caja[agente_id] = None
     with cajeros_lock:
+        global cajeros_disponibles
         cajeros_disponibles += 1
     socketio.emit('queue_update', get_queue_status())
+    socketio.emit('agente_update', get_agente_status())
 
 def procesar_servicio(numero_ticket):
+    global agente_servicio
     tiempo_atencion = random.randint(7, 15)
-    print(f"Procesando ticket {numero_ticket} en SERVICIO AL CLIENTE - tiempo estimado: {tiempo_atencion} segundos")
+    agente_servicio = f"S{numero_ticket:03d}"
+    socketio.emit('agente_update', get_agente_status())
     time.sleep(tiempo_atencion)
-    print(f"Ticket {numero_ticket} de SERVICIO AL CLIENTE ha sido atendido.")
-    global servicio_cliente_disponibles
+    agente_servicio = None
     with servicio_lock:
+        global servicio_cliente_disponibles
         servicio_cliente_disponibles += 1
     socketio.emit('queue_update', get_queue_status())
+    socketio.emit('agente_update', get_agente_status())
 
-# Monitoreo de colas
 def monitor_cola_caja():
     while True:
-        global cajeros_disponibles
         if not cola_caja.empty():
             with cajeros_lock:
-                if cajeros_disponibles > 0:
-                    cajeros_disponibles -= 1
-                    ticket = cola_caja.get()
-                    threading.Thread(target=procesar_caja, args=(ticket,)).start()
+                for i in range(len(agentes_caja)):
+                    if cajeros_disponibles > 0 and agentes_caja[i] is None:
+                        cajeros_disponibles -= 1
+                        ticket = cola_caja.get()
+                        threading.Thread(target=procesar_caja, args=(ticket, i)).start()
+                        break
         time.sleep(1)
 
 def monitor_cola_servicio():
     while True:
-        global servicio_cliente_disponibles
         if not cola_servicio_cliente.empty():
             with servicio_lock:
-                if servicio_cliente_disponibles > 0:
+                if servicio_cliente_disponibles > 0 and agente_servicio is None:
                     servicio_cliente_disponibles -= 1
                     ticket = cola_servicio_cliente.get()
                     threading.Thread(target=procesar_servicio, args=(ticket,)).start()
         time.sleep(1)
 
-# API Endpoints
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -102,10 +108,10 @@ def external_ticket():
     data = request.json
     if not data or 'tipo_servicio' not in data:
         return jsonify({'error': 'Invalid request'}), 400
-    
+
     cliente_id = data.get('cliente_id', f"EXT-{random.randint(1000,9999)}")
     ticket, pos, wait = generate_ticket(data['tipo_servicio'])
-    
+
     with db_lock:
         clientes_db[cliente_id] = {
             'ticket': ticket,
@@ -113,7 +119,7 @@ def external_ticket():
             'timestamp': datetime.now().isoformat(),
             'service': data['tipo_servicio']
         }
-    
+
     socketio.emit('queue_update', get_queue_status())
     return jsonify({
         'ticket': ticket,
@@ -122,22 +128,20 @@ def external_ticket():
         'cliente_id': cliente_id
     })
 
-@app.route('/api/attended/<cliente_id>', methods=['POST'])
-def mark_attended(cliente_id):
-    with db_lock:
-        if cliente_id in clientes_db:
-            clientes_db[cliente_id]['status'] = 'attended'
-            clientes_db[cliente_id]['attended_at'] = datetime.now().isoformat()
-            socketio.emit('attended_update', {'cliente_id': cliente_id})
-            return jsonify({'status': 'success'})
-    return jsonify({'error': 'Client not found'}), 404
-
 @app.route('/api/status/<cliente_id>', methods=['GET'])
 def client_status(cliente_id):
     with db_lock:
         if cliente_id in clientes_db:
             return jsonify(clientes_db[cliente_id])
     return jsonify({'error': 'Client not found'}), 404
+
+@app.route('/estado-colas')
+def estado_colas():
+    return jsonify(get_queue_status())
+
+@app.route('/estado-agentes')
+def estado_agentes():
+    return jsonify(get_agente_status())
 
 def get_queue_status():
     return {
@@ -149,6 +153,12 @@ def get_queue_status():
             'waiting': cola_servicio_cliente.qsize(),
             'available': servicio_cliente_disponibles
         }
+    }
+
+def get_agente_status():
+    return {
+        'agentes_caja': agentes_caja,
+        'agente_servicio': agente_servicio
     }
 
 if __name__ == '__main__':
