@@ -16,10 +16,14 @@
 <body class="bank-bg min-h-screen">
     <div class="container mx-auto px-4 py-8">
         <div class="glass rounded-xl p-8 max-w-4xl mx-auto">
+
+            <!-- Header + Admin -->
             <div class="flex justify-between items-center mb-8">
                 <h1 class="text-4xl font-extrabold text-blue-900 tracking-wide">🏦 Banco Virtual</h1>
                 <a href="/login" class="text-sm bg-blue-900 text-white px-4 py-2 rounded hover:bg-blue-800 shadow">Modo Admin</a>
             </div>
+
+            <!-- Botones de servicio -->
             <div class="flex flex-col sm:flex-row justify-center gap-6 mb-10">
                 <button onclick="getTicket('caja')" class="bg-blue-700 hover:bg-blue-800 text-white font-bold py-4 px-6 rounded-lg text-lg shadow-lg">
                     <i class="fas fa-cash-register mr-2"></i> Solicitar Ticket: Caja
@@ -28,19 +32,25 @@
                     <i class="fas fa-headset mr-2"></i> Servicio al Cliente
                 </button>
             </div>
+
+            <!-- Información de ticket -->
             <div id="ticketInfo" class="hidden border border-blue-200 p-6 rounded-lg mb-10 bg-blue-50">
                 <h2 class="text-2xl font-semibold mb-4 text-blue-800">🎫 Su Ticket</h2>
                 <div class="flex flex-col sm:flex-row justify-between items-center">
                     <div class="text-center sm:text-left mb-4 sm:mb-0">
-                        <p class="text-5xl font-bold text-blue-900" id="ticketNumber"></p>
+                        <p id="ticketNumber" class="text-5xl font-bold text-blue-900"></p>
                         <p class="text-gray-700">Posición en cola: <span id="position" class="font-semibold"></span></p>
                         <p class="text-gray-700">Tiempo restante: <span id="waitTime" class="font-semibold"></span> segundos</p>
-                    <//div>
-                    <div id="statusBadge" class="bg-yellow-100 text-yellow-800 px-4 py-2 rounded-full text-sm font-semibold shadow">En espera</div>
+                    </div>
+                    <div id="statusBadge" class="bg-yellow-100 text-yellow-800 px-4 py-2 rounded-full text-sm font-semibold shadow">
+                        En espera
+                    </div>
                 </div>
                 <div id="qrCode" class="mt-6 flex justify-center"></div>
             </div>
-            <div class="bg-white border border-gray-300 rounded-lg p-4 shadow-sm">
+
+            <!-- Estado de las colas -->
+            <div class="bg-white border border-gray-300 rounded-lg p-4 shadow-sm mb-10">
                 <h2 class="text-xl font-bold mb-4 flex justify-between items-center text-blue-800">
                     <span>📊 Estado de las Colas</span>
                     <span id="lastUpdate" class="text-sm text-gray-500"></span>
@@ -64,7 +74,9 @@
                     </div>
                 </div>
             </div>
-            <div class="mt-10">
+
+            <!-- Agentes atendiendo -->
+            <div class="mt-10 mb-10">
                 <h3 class="text-lg font-semibold text-gray-800 mb-2">👥 Agentes Atendiendo</h3>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div class="bg-white p-4 border rounded shadow">
@@ -81,79 +93,119 @@
                     </div>
                 </div>
             </div>
-            <div id="recentAttended" class="mt-10 hidden">
-                <h3 class="text-lg font-semibold text-gray-700 mb-2">🕓 Recientemente atendidos</h3>
-                <div id="attendedList" class="space-y-2"></div>
-            </div>
+
         </div>
     </div>
+
     <script>
-        const socket = io({ path: '/socket.io' });
-        let currentClientId = null;
-        let countdown = null;
+      const socket = io({ path: '/socket.io' });
+      let currentClientId = null, countdown = null;
 
-        socket.on('connect', () => updateQueueStatus());
+      socket.on('connect', () => updateQueueStatus());
 
-        socket.on('queue_update', data => { updateQueueUI(data); updateTimestamp(); });
+      socket.on('queue_update', data => {
+        updateQueueUI(data);
+        updateTimestamp();
+      });
 
-        socket.on('agente_update', data => {
-            document.getElementById('agenteCaja1').textContent = data.agentes_caja[0] || '—';
-            document.getElementById('agenteCaja2').textContent = data.agentes_caja[1] || '—';
-            document.getElementById('agenteServicio').textContent = data.agente_servicio || '—';
+      socket.on('agente_update', data => {
+        document.getElementById('agenteCaja1').textContent = data.agentes_caja[0] || '—';
+        document.getElementById('agenteCaja2').textContent = data.agentes_caja[1] || '—';
+        document.getElementById('agenteServicio').textContent = data.agente_servicio || '—';
+      });
+
+      function showTicketInfo(data) {
+        clearInterval(countdown);
+        document.getElementById('ticketNumber').textContent = data.ticket;
+        document.getElementById('position').textContent = data.position;
+        let remaining = data.wait_time;
+        document.getElementById('waitTime').textContent = remaining;
+        countdown = setInterval(() => {
+          remaining = Math.max(0, remaining - 1);
+          document.getElementById('waitTime').textContent = remaining;
+          if (remaining <= 0) clearInterval(countdown);
+        }, 1000);
+        document.getElementById('ticketInfo').classList.remove('hidden');
+        document.getElementById('statusBadge').textContent = 'En espera';
+        document.getElementById('statusBadge').className =
+          'bg-yellow-100 text-yellow-800 px-4 py-2 rounded-full text-sm font-semibold shadow';
+        document.getElementById('qrCode').innerHTML = `
+          <div class="bg-gray-200 p-2 rounded">
+            <div class="text-center text-xs">Scan for updates</div>
+            <div class="text-center text-4xl">${data.ticket}</div>
+          </div>`;
+      }
+
+      async function getTicket(tipo) {
+        const res = await fetch('/api/ticket', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ tipo_servicio: tipo })
         });
+        const data = await res.json();
+        if (res.ok) {
+          currentClientId = data.cliente_id;
+          showTicketInfo(data);
+          startStatusCheck(data.cliente_id);
+        } else alert(data.error);
+      }
 
-        function showTicketInfo(data) {
-            clearInterval(countdown);
-            document.getElementById('ticketNumber').textContent = data.ticket;
-            document.getElementById('position').textContent = data.position;
-            let remaining = data.wait_time;
-            document.getElementById('waitTime').textContent = remaining;
-            countdown = setInterval(() => {
-                remaining = Math.max(0, remaining-1);
-                document.getElementById('waitTime').textContent = remaining;
-                if (remaining<=0) clearInterval(countdown);
-            }, 1000);
-            document.getElementById('ticketInfo').classList.remove('hidden');
-            document.getElementById('statusBadge').textContent = 'En espera';
-            document.getElementById('statusBadge').className = 'bg-yellow-100 text-yellow-800 px-4 py-2 rounded-full text-sm font-semibold shadow';
-            document.getElementById('qrCode').innerHTML = `<div class="bg-gray-200 p-2 rounded"><div class="text-center text-xs">Scan for updates</div><div class="text-center text-4xl">${data.ticket}</div></div>`;
-        }
+      function updateQueueUI(data) {
+        document.getElementById('cajaCola').textContent = data.caja.waiting;
+        document.getElementById('cajaDisponibles').textContent = data.caja.available;
+        document.getElementById('cajaStatus').className =
+          data.caja.available > 0 ?
+          'w-4 h-4 mt-2 rounded-full bg-green-500' :
+          'w-4 h-4 mt-2 rounded-full bg-red-500';
+        document.getElementById('servicioCola').textContent = data.servicio_cliente.waiting;
+        document.getElementById('servicioDisponibles').textContent = data.servicio_cliente.available;
+        document.getElementById('servicioStatus').className =
+          data.servicio_cliente.available > 0 ?
+          'w-4 h-4 mt-2 rounded-full bg-green-500' :
+          'w-4 h-4 mt-2 rounded-full bg-red-500';
+      }
 
-        async function getTicket(tipo) {
-            const res = await fetch('/api/ticket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tipo_servicio:tipo})});
-            const data = await res.json();
-            if (res.ok) { currentClientId = data.cliente_id; showTicketInfo(data); startStatusCheck(data.cliente_id);} else alert(data.error);
-        }
+      function updateTimestamp() {
+        document.getElementById('lastUpdate').textContent = 
+          `Actualizado: ${new Date().toLocaleTimeString()}`;
+      }
 
-        function updateQueueUI(data) {
-            document.getElementById('cajaCola').textContent = data.caja.waiting;
-            document.getElementById('cajaDisponibles').textContent = data.caja.available;
-            document.getElementById('cajaStatus').className = data.caja.available>0?'w-4 h-4 mt-2 rounded-full bg-green-500':'w-4 h-4 mt-2 rounded-full bg-red-500';
-            document.getElementById('servicioCola').textContent = data.servicio_cliente.waiting;
-            document.getElementById('servicioDisponibles').textContent = data.servicio_cliente.available;
-            document.getElementById('servicioStatus').className = data.servicio_cliente.available>0?'w-4 h-4 mt-2 rounded-full bg-green-500':'w-4 h-4 mt-2 rounded-full bg-red-500';
-        }
+      function startStatusCheck(id) {
+        const iv = setInterval(async () => {
+          const r = await fetch(`/api/status/${id}`);
+          if (r.ok) {
+            const d = await r.json();
+            if (d.status === 'attended') {
+              clearInterval(iv);
+              document.getElementById('statusBadge').textContent = 'Atendido';
+              document.getElementById('statusBadge').className =
+                'bg-green-100 text-green-800 px-4 py-2 rounded-full text-sm font-semibold shadow';
+            }
+          }
+        }, 2000);
+      }
 
-        function updateTimestamp() {
-            document.getElementById('lastUpdate').textContent = `Actualizado: ${new Date().toLocaleTimeString()}`;
-        }
+      async function updateQueueStatus() {
+        try {
+          const [qRes, aRes] = await Promise.all([
+            fetch('/estado-colas'),
+            fetch('/estado-agentes')
+          ]);
+          if (qRes.ok) {
+            const q = await qRes.json();
+            updateQueueUI(q);
+            updateTimestamp();
+          }
+          if (aRes.ok) {
+            const d = await aRes.json();
+            document.getElementById('agenteCaja1').textContent = d.agentes_caja[0] || '—';
+            document.getElementById('agenteCaja2').textContent = d.agentes_caja[1] || '—';
+            document.getElementById('agenteServicio').textContent = d.agente_servicio || '—';
+          }
+        } catch (e) { console.error(e); }
+      }
 
-        function startStatusCheck(id) {
-            const iv = setInterval(async()=>{
-                const r=await fetch(`/api/status/${id}`);
-                if(r.ok){ const d=await r.json(); if(d.status==='attended'){ clearInterval(iv); document.getElementById('statusBadge').textContent='Atendido'; document.getElementById('statusBadge').className='bg-green-100 text-green-800 px-4 py-2 rounded-full text-sm font-semibold shadow'; }}
-            },2000);
-        }
-
-        async function updateQueueStatus() {
-            try {
-                const [qRes,aRes] = await Promise.all([fetch('/estado-colas'),fetch('/estado-agentes')]);
-                if(qRes.ok){ updateQueueUI(await qRes.json()); updateTimestamp(); }
-                if(aRes.ok){ socket.emit('agente_update',await aRes.json()); }
-            } catch(e){}
-        }
-
-        document.addEventListener('DOMContentLoaded',() => updateQueueStatus());
+      document.addEventListener('DOMContentLoaded', () => updateQueueStatus());
     </script>
 </body>
 </html>
