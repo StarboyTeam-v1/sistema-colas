@@ -154,4 +154,4 @@ def get_queue_status():
 if __name__ == '__main__':
     threading.Thread(target=monitor_cola_caja, daemon=True).start()
     threading.Thread(target=monitor_cola_servicio, daemon=True).start()
-    socketio.run(app, debug=True, port=5000)
+    socketio.run(app, host="0.0.0.0", port=10000)
